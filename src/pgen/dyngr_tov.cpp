@@ -1009,10 +1009,10 @@ static void GetPrimitivesAtIsoPoint(const tov_pgen& tov, const TOVEOS& eos, Real
   const auto &alps = tov.alp.d_view;
   const auto &Ms = tov.M.d_view;
   if (idx >= tov.npoints || idx < 0) {
-    printf("There's a problem with the index!\n" // NOLINT
-           " idx = %d\n"
-           " r_iso = %g\n"
-           " dr = %g\n",idx,r_iso,tov.dr);
+//    printf("There's a problem with the index!\n" // NOLINT
+//           " idx = %d\n"
+//           " r_iso = %g\n"
+//           " dr = %g\n",idx,r_iso,tov.dr);
   }
   // Interpolate to get the primitive.
   p = Interpolate(r_iso, R_iso(idx), R_iso(idx+1), Ps(idx), Ps(idx+1));
@@ -1022,7 +1022,7 @@ static void GetPrimitivesAtIsoPoint(const tov_pgen& tov, const TOVEOS& eos, Real
   //rho = pow(p/tov.kappa, 1.0/tov.gamma);
   rho = eos.template GetRhoFromP<LocationTag::Device>(fmax(p, tov.pfloor));
   if (!isfinite(p)) {
-    printf("There's a problem with p!\n"); // NOLINT
+//    printf("There's a problem with p!\n"); // NOLINT
     assert(false);
   }
 }
