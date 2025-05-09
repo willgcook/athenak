@@ -29,6 +29,10 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+
+# Add a folder for CMake modules... (e.g. to find external libraries)
+set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
+
 #------ default values for compile time options  -----------------------------------------
 
 option(Athena_SINGLE_PRECISION "Compile for single precision" OFF)
@@ -106,6 +110,21 @@ if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
   set(Kokkos_ENABLE_DEBUG_DUALVIEW_MODIFY_CHECK ON CACHE BOOL
       "Sanity checks on Kokkos DualView")
 endif()
+
+#######SALVO and SAJAD modification
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+#- VTune support, transparent to the user.
+ find_package(VTune)
+ if (VTune_FOUND)
+   include_directories(${VTune_INCLUDE_DIRS})
+   link_libraries(${VTune_LIBRARIES})
+   add_definitions(-DVTUNE_API_AVAILABLE)
+   message(STATUS "Enabling VTune API integration for Echo. More fine-grained profiling available.")
+ else()
+   message(STATUS "VTune Profiler unavailable. Consider making it available at configuration time it if you plan on using VTune.")
+ endif(VTune_FOUND)
+endif()
+
 
 #------ create configuration header file from template in /src directory -----------------
 
@@ -208,4 +227,3 @@ target_include_directories(athena PUBLIC
 configure_file(config.hpp.in config.hpp)
 
 install( TARGETS athena DESTINATION bin )
-

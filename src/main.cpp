@@ -31,6 +31,9 @@
 #include <cstdio> // sscanf
 #include <fstream>  // Include this for std::ifstream
 
+#ifdef VTUNE_API_AVAILABLE
+#include <ittnotify.h>
+#endif
 // Athena headers
 #include "athena.hpp"
 #include "globals.hpp"
@@ -58,6 +61,10 @@
 //! \brief Athena main program
 
 int main(int argc, char *argv[]) {
+#ifdef VTUNE_API_AVAILABLE
+	__itt_pause ();
+#endif
+
   std::string input_file, restart_file, run_dir;
   bool iarg_flag = false;  // set to true if -i <file> argument is on cmdline
   bool marg_flag = false;  // set to true if -m        argument is on cmdline
@@ -344,7 +351,13 @@ int main(int argc, char *argv[]) {
   //    3. Any final analysis or diagnostics run in Driver::Finalize()
 
   pdriver->Initialize(pmesh, pinput, pout, res_flag);
+#ifdef VTUNE_API_AVAILABLE
+        __itt_resume ();
+#endif
   pdriver->Execute(pmesh, pinput, pout);
+#ifdef VTUNE_API_AVAILABLE
+        __itt_pause ();
+#endif
   pdriver->Finalize(pmesh, pinput, pout);
 
   //--- Step 8. -------------------------------------------------------------------------
