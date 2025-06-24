@@ -145,7 +145,7 @@ void HLLE_DYNGR(TeamMember_t const &member,
     } else if    (ivx == IVZ){ adm::Face3Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
     }
 
-    Real sdetg = kokkos::sqrt(Primitive::GetDeterminant(g3d));
+    Real sdetg = Kokkos::sqrt(Primitive::GetDeterminant(g3d));
     Real isdetg = 1.0/sdetg;
 
     // Extract left and right primitives
