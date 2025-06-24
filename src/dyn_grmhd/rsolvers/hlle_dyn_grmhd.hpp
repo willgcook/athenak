@@ -28,45 +28,46 @@ void SingleStateHLLE_DYNGR(const PrimitiveSolverHydro<EOSPolicy, ErrorPolicy>& e
     const int nmhd, const int nscal,
     Real g3d[NSPMETRIC], Real beta_u[3], Real alpha,
     Real flux[NCONS], Real bflux[NMAG]) {
+
   constexpr int ibx = ivx - IVX;
-  constexpr int iby = ((ivx - IVX) + 1)%3;
-  constexpr int ibz = ((ivx - IVX) + 2)%3;
-
-  constexpr int diag[3] = {S11, S22, S33};
+  constexpr int iby =(ibx +   1)%3;
+  constexpr int ibz =(ibx +   2)%3;
+  constexpr int pvx = ibx + PVX;
+  constexpr int diag[3]    = {S11, S22, S33};
   constexpr int offdiag[3] = {S23, S13, S12};
-  constexpr int offidx = offdiag[ivx - IVX];
-  constexpr int idxy = diag[(ivx - IVX + 1) % 3];
-  constexpr int idxz = diag[(ivx - IVX + 2) % 3];
-
-  constexpr int pvx = PVX + (ivx - IVX);
+  constexpr int offidx  = offdiag[ibx];
+  constexpr int    idxy =    diag[iby];
+  constexpr int    idxz =    diag[ibz];
 
   Real sdetg = sqrt(Primitive::GetDeterminant(g3d));
   Real isdetg = 1.0/sdetg;
+  Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
 
-  // Undensitize the magnetic field before calculating the conserved variables
-  Real Bu_lund[NMAG], Bu_rund[NMAG];
+  // Undensitize the magnetic field before calculating the conserved variables (l)
+  Real Bu_lund[NMAG];
   for (int n = 0; n < NMAG; n++) {
     Bu_lund[n] = Bu_l[n]*isdetg;
+  }
+  // Calculate the left fluxes
+  Real cons_l[NCONS], fl[NCONS], bfl[NMAG], bsql;
+  SingleStateFluxLR<ivx>(eos, nmhd, nscal, g3d, beta_u, alpha, prim_l, Bu_lund, cons_l, fl, bfl, bsql);
+  // Calculate the magnetosonic speeds for left
+  Real lambda_pl, lambda_ml;
+  eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+
+  // Undensitize the magnetic field before calculating the conserved variables (r)
+  Real Bu_rund[NMAG];
+  for (int n = 0; n < NMAG; n++) {
     Bu_rund[n] = Bu_r[n]*isdetg;
   }
+  // Calculate the right fluxes
+  Real cons_r[NCONS], fr[NCONS], bfr[NMAG], bsqr;
+  SingleStateFluxLR<ivx>(eos, nmhd, nscal, g3d, beta_u, alpha, prim_r, Bu_rund, cons_r, fr, bfr, bsqr);
+  // Calculate the magnetosonic speeds for right
+  Real lambda_pr, lambda_mr;
+  eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
 
-  // Calculate the left and right fluxes
-  Real cons_l[NCONS], cons_r[NCONS];
-  Real fl[NCONS], fr[NCONS], bfl[NMAG], bfr[NMAG];
-  Real bsql, bsqr;
-  SingleStateFlux<ivx>(eos, prim_l, prim_r, Bu_lund, Bu_rund, nmhd, nscal, g3d, beta_u,
-                       alpha, cons_l, cons_r, fl, fr, bfl, bfr, bsql, bsqr);
-
-
-  // Calculate the magnetosonic speeds for both states
-  Real lambda_pl, lambda_pr, lambda_ml, lambda_mr;
-  Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
-  eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql,
-                                  g3d, beta_u, alpha, gii, pvx);
-  eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr,
-                                  g3d, beta_u, alpha, gii, pvx);
-
-  // Get the extremal wavespeeds
+  // Calculate extremal wavespeeds
   Real lambda_l = fmin(lambda_ml, lambda_mr);
   Real lambda_r = fmax(lambda_pl, lambda_pr);
 
@@ -74,21 +75,14 @@ void SingleStateHLLE_DYNGR(const PrimitiveSolverHydro<EOSPolicy, ErrorPolicy>& e
   Real qa = lambda_r*lambda_l/alpha;
   Real qb = 1.0/(lambda_r - lambda_l);
   Real f_hll[NCONS], bf_hll[NMAG];
-  f_hll[CDN] = (lambda_r*fl[CDN] - lambda_l*fr[CDN] +
-                qa*(cons_r[CDN] - cons_l[CDN])) * qb;
-  f_hll[CSX] = (lambda_r*fl[CSX] - lambda_l*fr[CSX] +
-                qa*(cons_r[CSX] - cons_l[CSX])) * qb;
-  f_hll[CSY] = (lambda_r*fl[CSY] - lambda_l*fr[CSY] +
-                qa*(cons_r[CSY] - cons_l[CSY])) * qb;
-  f_hll[CSZ] = (lambda_r*fl[CSZ] - lambda_l*fr[CSZ] +
-                qa*(cons_r[CSZ] - cons_l[CSZ])) * qb;
-  f_hll[CTA] = (lambda_r*fl[CTA] - lambda_l*fr[CTA] +
-                qa*(cons_r[CTA] - cons_l[CTA])) * qb;
+  f_hll[CDN] = (lambda_r*fl[CDN] - lambda_l*fr[CDN] + qa*(cons_r[CDN] - cons_l[CDN])) * qb;
+  f_hll[CSX] = (lambda_r*fl[CSX] - lambda_l*fr[CSX] + qa*(cons_r[CSX] - cons_l[CSX])) * qb;
+  f_hll[CSY] = (lambda_r*fl[CSY] - lambda_l*fr[CSY] + qa*(cons_r[CSY] - cons_l[CSY])) * qb;
+  f_hll[CSZ] = (lambda_r*fl[CSZ] - lambda_l*fr[CSZ] + qa*(cons_r[CSZ] - cons_l[CSZ])) * qb;
+  f_hll[CTA] = (lambda_r*fl[CTA] - lambda_l*fr[CTA] + qa*(cons_r[CTA] - cons_l[CTA])) * qb;
   bf_hll[ibx] = 0.0;
-  bf_hll[iby] = (lambda_r*bfl[iby] - lambda_l*bfr[iby] +
-                 qa*(Bu_r[iby] - Bu_l[iby])) * qb;
-  bf_hll[ibz] = (lambda_r*bfl[ibz] - lambda_l*bfr[ibz] +
-                 qa*(Bu_r[ibz] - Bu_l[ibz])) * qb;
+  bf_hll[iby] = (lambda_r*bfl[iby] - lambda_l*bfr[iby] + qa*(Bu_r[iby] - Bu_l[iby])) * qb;
+  bf_hll[ibz] = (lambda_r*bfl[ibz] - lambda_l*bfr[ibz] + qa*(Bu_r[ibz] - Bu_l[ibz])) * qb;
 
   Real *f_interface, *bf_interface;
   if (lambda_l >= 0.) {
@@ -105,13 +99,12 @@ void SingleStateHLLE_DYNGR(const PrimitiveSolverHydro<EOSPolicy, ErrorPolicy>& e
   Real vol = sdetg*alpha;
 
   // Calculate the fluxes
-  flux[CDN] = vol * f_interface[CDN];
-  flux[CSX] = vol * f_interface[CSX];
-  flux[CSY] = vol * f_interface[CSY];
-  flux[CSZ] = vol * f_interface[CSZ];
-  flux[CTA] = vol * f_interface[CTA];
-
-  bflux[IBY] = - vol * bf_interface[iby];
+   flux[CDN] = vol * f_interface[CDN];
+   flux[CSX] = vol * f_interface[CSX];
+   flux[CSY] = vol * f_interface[CSY];
+   flux[CSZ] = vol * f_interface[CSZ];
+   flux[CTA] = vol * f_interface[CTA];
+  bflux[IBY] =-vol * bf_interface[iby];
   bflux[IBZ] = vol * bf_interface[ibz];
 }
 
@@ -130,32 +123,29 @@ void HLLE_DYNGR(TeamMember_t const &member,
      const ScrArray2D<Real> &bl, const ScrArray2D<Real> &br, const DvceArray4D<Real> &bx,
      const int& nhyd, const int& nscal,
      const adm::ADM::ADM_vars& adm,
-     DvceArray5D<Real> flx, DvceArray4D<Real> ey, DvceArray4D<Real> ez) {
+     DvceArray5D<Real> flx, DvceArray4D<Real> ey, DvceArray4D<Real> ez
+){
   par_for_inner(member, il, iu, [&](const int i) {
     constexpr int ibx = ivx - IVX;
-    constexpr int iby = ((ivx - IVX) + 1)%3;
-    constexpr int ibz = ((ivx - IVX) + 2)%3;
-
-    constexpr int diag[3] = {S11, S22, S33};
+    constexpr int iby = ((ibx) + 1)%3;
+    constexpr int ibz = ((ibx) + 2)%3;
+    constexpr int    diag[3] = {S11, S22, S33};
     constexpr int offdiag[3] = {S23, S13, S12};
-    constexpr int offidx = offdiag[ivx - IVX];
-    constexpr int idxy = diag[(ivx - IVX + 1) % 3];
-    constexpr int idxz = diag[(ivx - IVX + 2) % 3];
-
-    constexpr int pvx = PVX + (ivx - IVX);
+    constexpr int offidx = offdiag[ibx];
+    constexpr int idxy = diag[(ibx+1) % 3];
+    constexpr int idxz = diag[(ibx+2) % 3];
+    constexpr int pvx = PVX + ibx;
 
     Real g3d[NSPMETRIC];
     Real beta_u[3];
     Real alpha;
-    if constexpr (ivx == IVX) {
-      adm::Face1Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
-    } else if (ivx == IVY) {
-      adm::Face2Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
-    } else if (ivx == IVZ) {
-      adm::Face3Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
+
+    if constexpr (ivx == IVX){ adm::Face1Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
+    } else if    (ivx == IVY){ adm::Face2Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
+    } else if    (ivx == IVZ){ adm::Face3Metric(m, k, j, i, adm.g_dd, adm.beta_u, adm.alpha, g3d, beta_u, alpha);
     }
 
-    Real sdetg = sqrt(Primitive::GetDeterminant(g3d));
+    Real sdetg = kokkos::sqrt(Primitive::GetDeterminant(g3d));
     Real isdetg = 1.0/sdetg;
 
     // Extract left and right primitives
@@ -196,26 +186,21 @@ void HLLE_DYNGR(TeamMember_t const &member,
     Bu_r[ibz] = br(ibz, i)*isdetg;
 
     // Apply floors to make sure these values are physical.
-    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR],
-                                    prim_l[PTM], &prim_l[PYF]);
-    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_r[PRH], &prim_r[PVX], prim_r[PPR],
-                                    prim_r[PTM], &prim_r[PYF]);
+    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR], prim_l[PTM], &prim_l[PYF]);
+    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_r[PRH], &prim_r[PVX], prim_r[PPR], prim_r[PTM], &prim_r[PYF]);
 
     // Calculate the left and right fluxes
     Real cons_l[NCONS], cons_r[NCONS];
     Real fl[NCONS], fr[NCONS], bfl[NMAG], bfr[NMAG];
     Real bsql, bsqr;
-    SingleStateFlux<ivx>(eos, prim_l, prim_r, Bu_l, Bu_r, nhyd, nscal, g3d, beta_u, alpha,
-                         cons_l, cons_r, fl, fr, bfl, bfr, bsql, bsqr);
+    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_l, Bu_l, cons_l,  fl, bfl,  bsql);
+    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_r, Bu_r, cons_r,  fr, bfr,  bsqr);
 
     // Calculate the magnetosonic speeds for both states
     Real lambda_pl, lambda_pr, lambda_ml, lambda_mr;
     Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
-    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql,
-                                    g3d, beta_u, alpha, gii, pvx);
-    eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr,
-                                    g3d, beta_u, alpha, gii, pvx);
-
+    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+    eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
     // Get the extremal wavespeeds
     Real lambda_l = fmin(lambda_ml, lambda_mr);
     Real lambda_r = fmax(lambda_pl, lambda_pr);
@@ -224,21 +209,16 @@ void HLLE_DYNGR(TeamMember_t const &member,
     Real qa = lambda_r*lambda_l/alpha;
     Real qb = 1.0/(lambda_r - lambda_l);
     Real f_hll[NCONS], bf_hll[NMAG];
-    f_hll[CDN] = ((lambda_r*fl[CDN] - lambda_l*fr[CDN]) +
-                  qa*(cons_r[CDN] - cons_l[CDN])) * qb;
-    f_hll[CSX] = ((lambda_r*fl[CSX] - lambda_l*fr[CSX]) +
-                  qa*(cons_r[CSX] - cons_l[CSX])) * qb;
-    f_hll[CSY] = ((lambda_r*fl[CSY] - lambda_l*fr[CSY]) +
-                  qa*(cons_r[CSY] - cons_l[CSY])) * qb;
-    f_hll[CSZ] = ((lambda_r*fl[CSZ] - lambda_l*fr[CSZ]) +
-                  qa*(cons_r[CSZ] - cons_l[CSZ])) * qb;
-    f_hll[CTA] = ((lambda_r*fl[CTA] - lambda_l*fr[CTA]) +
-                  qa*(cons_r[CTA] - cons_l[CTA])) * qb;
+
+    f_hll[CDN] = ((lambda_r*fl[CDN] - lambda_l*fr[CDN]) + qa*(cons_r[CDN] - cons_l[CDN])) * qb;
+    f_hll[CSX] = ((lambda_r*fl[CSX] - lambda_l*fr[CSX]) + qa*(cons_r[CSX] - cons_l[CSX])) * qb;
+    f_hll[CSY] = ((lambda_r*fl[CSY] - lambda_l*fr[CSY]) + qa*(cons_r[CSY] - cons_l[CSY])) * qb;
+    f_hll[CSZ] = ((lambda_r*fl[CSZ] - lambda_l*fr[CSZ]) + qa*(cons_r[CSZ] - cons_l[CSZ])) * qb;
+    f_hll[CTA] = ((lambda_r*fl[CTA] - lambda_l*fr[CTA]) + qa*(cons_r[CTA] - cons_l[CTA])) * qb;
+
     bf_hll[ibx] = 0.0;
-    bf_hll[iby] = ((lambda_r*bfl[iby] - lambda_l*bfr[iby]) +
-                   qa*(Bu_r[iby] - Bu_l[iby])) * qb;
-    bf_hll[ibz] = ((lambda_r*bfl[ibz] - lambda_l*bfr[ibz]) +
-                   qa*(Bu_r[ibz] - Bu_l[ibz])) * qb;
+    bf_hll[iby] =((lambda_r*bfl[iby] - lambda_l*bfr[iby]) + qa*(Bu_r[iby] - Bu_l[iby])) * qb;
+    bf_hll[ibz] =((lambda_r*bfl[ibz] - lambda_l*bfr[ibz]) + qa*(Bu_r[ibz] - Bu_l[ibz])) * qb;
 
     Real *f_interface, *bf_interface;
     if (lambda_l >= 0.) {
