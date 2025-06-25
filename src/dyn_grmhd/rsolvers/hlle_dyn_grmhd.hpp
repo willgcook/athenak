@@ -127,8 +127,8 @@ void HLLE_DYNGR(TeamMember_t const &member,
 ){
   par_for_inner(member, il, iu, [&](const int i) {
     constexpr int ibx = ivx - IVX;
-    constexpr int iby = ((ibx) + 1)%3;
-    constexpr int ibz = ((ibx) + 2)%3;
+    constexpr int iby = (ibx + 1)%3;
+    constexpr int ibz = (ibx + 2)%3;
     constexpr int    diag[3] = {S11, S22, S33};
     constexpr int offdiag[3] = {S23, S13, S12};
     constexpr int offidx = offdiag[ibx];
@@ -147,12 +147,11 @@ void HLLE_DYNGR(TeamMember_t const &member,
 
     Real sdetg = Kokkos::sqrt(Primitive::GetDeterminant(g3d));
     Real isdetg = 1.0/sdetg;
-
-    // Extract left and right primitives
-    Real prim_l[NPRIM], prim_r[NPRIM];
-    Real Bu_l[NMAG], Bu_r[NMAG];
     Real mb = eos.ps.GetEOS().GetBaryonMass();
+    Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
 
+    // Extract left primitives
+    Real prim_l[NPRIM], Bu_l[NMAG];
     prim_l[PRH] = wl(IDN, i)/mb;
     prim_l[PVX] = wl(IVX, i);
     prim_l[PVY] = wl(IVY, i);
@@ -168,7 +167,19 @@ void HLLE_DYNGR(TeamMember_t const &member,
     Bu_l[ibx] = bx(m, k, j, i)*isdetg;
     Bu_l[iby] = bl(iby, i)*isdetg;
     Bu_l[ibz] = bl(ibz, i)*isdetg;
+    // Apply floors to make sure these values are physical.
+    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR], prim_l[PTM], &prim_l[PYF]);
+    // Calculate the left fluxes
+    Real cons_l[NCONS], fl[NCONS], bfl[NMAG], bsql;
+    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_l, Bu_l, cons_l,  fl, bfl,  bsql);
+    // Calculate the magnetosonic speeds for left states
+    Real lambda_pl, lambda_ml;
+    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+    // Get the extremal wavespeeds
+    Real lambda_l = fmin(lambda_ml, lambda_mr);
 
+    // Extract right primitives
+    Real prim_r[NPRIM], Bu_r[NMAG];
     prim_r[PRH] = wr(IDN, i)/mb;
     prim_r[PVX] = wr(IVX, i);
     prim_r[PVY] = wr(IVY, i);
@@ -184,27 +195,18 @@ void HLLE_DYNGR(TeamMember_t const &member,
     Bu_r[ibx] = bx(m, k, j, i)*isdetg;
     Bu_r[iby] = br(iby, i)*isdetg;
     Bu_r[ibz] = br(ibz, i)*isdetg;
-
     // Apply floors to make sure these values are physical.
-    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR], prim_l[PTM], &prim_l[PYF]);
     eos.ps.GetEOS().ApplyPrimitiveFloor(prim_r[PRH], &prim_r[PVX], prim_r[PPR], prim_r[PTM], &prim_r[PYF]);
-
-    // Calculate the left and right fluxes
-    Real cons_l[NCONS], cons_r[NCONS];
-    Real fl[NCONS], fr[NCONS], bfl[NMAG], bfr[NMAG];
-    Real bsql, bsqr;
-    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_l, Bu_l, cons_l,  fl, bfl,  bsql);
+    // Calculate the right fluxes
+    Real cons_r[NCONS], fr[NCONS], bfr[NMAG], bsqr;
     SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_r, Bu_r, cons_r,  fr, bfr,  bsqr);
-
-    // Calculate the magnetosonic speeds for both states
-    Real lambda_pl, lambda_pr, lambda_ml, lambda_mr;
-    Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
-    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+    // Calculate the magnetosonic speeds for right states
+    Real lambda_pr, lambda_mr;
     eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
     // Get the extremal wavespeeds
-    Real lambda_l = fmin(lambda_ml, lambda_mr);
     Real lambda_r = fmax(lambda_pl, lambda_pr);
 
+    // Unsplit part begins here
     // Calculate fluxes in HLL region
     Real qa = lambda_r*lambda_l/alpha;
     Real qb = 1.0/(lambda_r - lambda_l);
@@ -244,7 +246,7 @@ void HLLE_DYNGR(TeamMember_t const &member,
     // Ez = Fx(Bz), rather than Ez = -Fx(By) and Ey = Fx(Bz). However, the appropriate
     // containers for ey and ez for each direction are passed in as arguments to this
     // function, ensuring that the result is entirely consistent.
-    ey(m, k, j, i) = -vol * bf_interface[iby];
+    ey(m, k, j, i) =-vol * bf_interface[iby];
     ez(m, k, j, i) = vol * bf_interface[ibz];
   });
 }
