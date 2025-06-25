@@ -175,8 +175,6 @@ void HLLE_DYNGR(TeamMember_t const &member,
     // Calculate the magnetosonic speeds for left states
     Real lambda_pl, lambda_ml;
     eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
-    // Get the extremal wavespeeds
-    Real lambda_l = fmin(lambda_ml, lambda_mr);
 
     // Extract right primitives
     Real prim_r[NPRIM], Bu_r[NMAG];
@@ -203,10 +201,12 @@ void HLLE_DYNGR(TeamMember_t const &member,
     // Calculate the magnetosonic speeds for right states
     Real lambda_pr, lambda_mr;
     eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
-    // Get the extremal wavespeeds
-    Real lambda_r = fmax(lambda_pl, lambda_pr);
 
     // Unsplit part begins here
+    // Get the extremal wavespeeds
+    Real lambda_l = fmin(lambda_ml, lambda_mr);
+    Real lambda_r = fmax(lambda_pl, lambda_pr);
+
     // Calculate fluxes in HLL region
     Real qa = lambda_r*lambda_l/alpha;
     Real qb = 1.0/(lambda_r - lambda_l);
