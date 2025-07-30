@@ -47,27 +47,30 @@ void SingleStateLLF_DYNGR(const PrimitiveSolverHydro<EOSPolicy, ErrorPolicy>& eo
   Real isdetg = 1.0/sdetg;
 
   // Undensitize the magnetic field before calculating the conserved variables
-  Real Bu_lund[NMAG], Bu_rund[NMAG];
-  for (int n = 0; n < NMAG; n++) {
-    Bu_lund[n] = Bu_l[n]*isdetg;
-    Bu_rund[n] = Bu_r[n]*isdetg;
-  }
+  Real Bu_lund[NMAG], cons_l[NCONS], fl[NCONS], bfl[NMAG];
+  Real bsql;
 
   // Calculate the left and right fluxes
-  Real cons_l[NCONS], cons_r[NCONS];
-  Real fl[NCONS], fr[NCONS], bfl[NMAG], bfr[NMAG];
-  Real bsql, bsqr;
-  SingleStateFlux<ivx>(eos, prim_l, prim_r, Bu_lund, Bu_rund, nmhd, nscal, g3d, beta_u,
-                       alpha, cons_l, cons_r, fl, fr, bfl, bfr, bsql, bsqr);
+  for (int n = 0; n < NMAG; n++) {
+    Bu_lund[n] = Bu_l[n]*isdetg;
+  }
+  SingleStateFluxLR<ivx>(eos, nmhd, nscal, g3d, beta_u, alpha, prim_l, Bu_lund, cons_l, fl, bfl, bsql);
 
+  Real lambda_pl, lambda_ml;
+  Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
+  eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+
+  Real Bu_rund[NMAG], cons_r[NCONS], fr[NCONS], bfr[NMAG];
+  Real bsqr;
+
+  for (int n = 0; n < NMAG; n++) {
+    Bu_rund[n] = Bu_r[n]*isdetg;
+  }
+  SingleStateFluxLR<ivx>(eos, nmhd, nscal, g3d, beta_u, alpha, prim_r, Bu_rund, cons_r, fr, bfr, bsqr);
 
   // Calculate the magnetosonic speeds for both states
-  Real lambda_pl, lambda_pr, lambda_ml, lambda_mr;
-  Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
-  eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql,
-                                  g3d, beta_u, alpha, gii, pvx);
-  eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr,
-                                  g3d, beta_u, alpha, gii, pvx);
+  Real lambda_pr, lambda_mr;
+  eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
 
   // Get the extremal wavespeeds
   Real lambda_l = fmin(lambda_ml, lambda_mr);
@@ -83,10 +86,8 @@ void SingleStateLLF_DYNGR(const PrimitiveSolverHydro<EOSPolicy, ErrorPolicy>& eo
   flux[CSZ] = 0.5*sdetg*(alpha*(fl[CSZ] + fr[CSZ]) - lambda*(cons_r[CSZ] - cons_l[CSZ]));
   flux[CTA] = 0.5*sdetg*(alpha*(fl[CTA] + fr[CTA]) - lambda*(cons_r[CTA] - cons_l[CTA]));
 
-  bflux[IBY] = - 0.5 * sdetg *
-               (alpha*(bfl[iby] + bfr[iby]) - lambda * (Bu_rund[iby] - Bu_lund[iby]));
-  bflux[IBZ] = 0.5 * sdetg *
-               (alpha*(bfl[ibz] + bfr[ibz]) - lambda * (Bu_rund[ibz] - Bu_lund[ibz]));
+  bflux[IBY] = -0.5 * sdetg * (alpha*(bfl[iby] + bfr[iby]) - lambda * (Bu_rund[iby] - Bu_lund[iby]));
+  bflux[IBZ] =  0.5 * sdetg * (alpha*(bfl[ibz] + bfr[ibz]) - lambda * (Bu_rund[ibz] - Bu_lund[ibz]));
 }
 
 //----------------------------------------------------------------------------------------
@@ -107,6 +108,7 @@ void LLF_DYNGR(TeamMember_t const &member,
      const int& nhyd, const int& nscal,
      const adm::ADM::ADM_vars& adm,
      DvceArray5D<Real> flx, DvceArray4D<Real> ey, DvceArray4D<Real> ez) {
+
   par_for_inner(member, il, iu, [&](const int i) {
     constexpr int ibx = ivx - IVX;
     constexpr int iby = ((ivx - IVX) + 1)%3;
@@ -135,8 +137,7 @@ void LLF_DYNGR(TeamMember_t const &member,
     Real isdetg = 1.0/sdetg;
 
     // Extract left and right primitives
-    Real prim_l[NPRIM], prim_r[NPRIM];
-    Real Bu_l[NMAG], Bu_r[NMAG];
+    Real prim_l[NPRIM], Bu_l[NMAG];
     Real mb = eos.ps.GetEOS().GetBaryonMass();
 
     prim_l[PRH] = wl(IDN, i)/mb;
@@ -149,12 +150,23 @@ void LLF_DYNGR(TeamMember_t const &member,
     eos.ps.GetEOS().ApplyDensityLimits(prim_l[PRH]);
     eos.ps.GetEOS().ApplySpeciesLimits(&prim_l[PYF]);
     prim_l[PPR] = wl(IPR, i);
-    prim_l[PTM] = eos.ps.GetEOS().GetTemperatureFromP(
-                  prim_l[PRH], prim_l[PPR], &prim_l[PYF]);
+    prim_l[PTM] = eos.ps.GetEOS().GetTemperatureFromP(prim_l[PRH], prim_l[PPR], &prim_l[PYF]);
     Bu_l[ibx] = bx(m, k, j, i)*isdetg;
     Bu_l[iby] = bl(iby, i)*isdetg;
     Bu_l[ibz] = bl(ibz, i)*isdetg;
 
+    // Apply floors to make sure these values are physical.
+    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR], prim_l[PTM], &prim_l[PYF]);
+    // Calculate the left and right fluxes
+    Real cons_l[NCONS], fl[NCONS], bfl[NMAG];
+    Real bsql;
+    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_l, Bu_l, cons_l, fl, bfl, bsql);
+
+    Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
+    Real lambda_pl, lambda_ml;
+    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql, g3d, beta_u, alpha, gii, pvx);
+
+    Real prim_r[NPRIM], Bu_r[NMAG];
     prim_r[PRH] = wr(IDN, i)/mb;
     prim_r[PVX] = wr(IVX, i);
     prim_r[PVY] = wr(IVY, i);
@@ -165,32 +177,21 @@ void LLF_DYNGR(TeamMember_t const &member,
     eos.ps.GetEOS().ApplyDensityLimits(prim_r[PRH]);
     eos.ps.GetEOS().ApplySpeciesLimits(&prim_r[PYF]);
     prim_r[PPR] = wr(IPR, i);
-    prim_r[PTM] = eos.ps.GetEOS().GetTemperatureFromP(
-                  prim_r[PRH], prim_r[PPR], &prim_r[PYF]);
+    prim_r[PTM] = eos.ps.GetEOS().GetTemperatureFromP(prim_r[PRH], prim_r[PPR], &prim_r[PYF]);
     Bu_r[ibx] = bx(m, k, j, i)*isdetg;
     Bu_r[iby] = br(iby, i)*isdetg;
     Bu_r[ibz] = br(ibz, i)*isdetg;
 
     // Apply floors to make sure these values are physical.
-    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_l[PRH], &prim_l[PVX], prim_l[PPR],
-                                    prim_l[PTM], &prim_l[PYF]);
-    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_r[PRH], &prim_r[PVX], prim_r[PPR],
-                                    prim_r[PTM], &prim_r[PYF]);
+    eos.ps.GetEOS().ApplyPrimitiveFloor(prim_r[PRH], &prim_r[PVX], prim_r[PPR], prim_r[PTM], &prim_r[PYF]);
 
-    // Calculate the left and right fluxes
-    Real cons_l[NCONS], cons_r[NCONS];
-    Real fl[NCONS], fr[NCONS], bfl[NMAG], bfr[NMAG];
-    Real bsql, bsqr;
-    SingleStateFlux<ivx>(eos, prim_l, prim_r, Bu_l, Bu_r, nhyd, nscal, g3d, beta_u, alpha,
-                         cons_l, cons_r, fl, fr, bfl, bfr, bsql, bsqr);
+    Real cons_r[NCONS], fr[NCONS], bfr[NMAG];
+    Real bsqr;
+    SingleStateFluxLR<ivx>(eos, nhyd, nscal, g3d, beta_u, alpha, prim_r, Bu_r, cons_r, fr, bfr, bsqr);
 
     // Calculate the magnetosonic speeds for both states
-    Real lambda_pl, lambda_pr, lambda_ml, lambda_mr;
-    Real gii = (g3d[idxy]*g3d[idxz] - g3d[offidx]*g3d[offidx])*(isdetg*isdetg);
-    eos.GetGRFastMagnetosonicSpeeds(lambda_pl, lambda_ml, prim_l, bsql,
-                                    g3d, beta_u, alpha, gii, pvx);
-    eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr,
-                                    g3d, beta_u, alpha, gii, pvx);
+    Real lambda_pr, lambda_mr;
+    eos.GetGRFastMagnetosonicSpeeds(lambda_pr, lambda_mr, prim_r, bsqr, g3d, beta_u, alpha, gii, pvx);
 
     // Get the extremal wavespeeds
     Real lambda_l = fmin(lambda_ml, lambda_mr);
@@ -200,24 +201,17 @@ void LLF_DYNGR(TeamMember_t const &member,
     //Real vol = sdetg*alpha;
 
     // Calculate the fluxes
-    flx(m, IDN, k, j, i) = 0.5 * sdetg * (alpha*(fl[CDN] + fr[CDN]) -
-                                  lambda * (cons_r[CDN] - cons_l[CDN]));
-    flx(m, IEN, k, j, i) = 0.5 * sdetg * (alpha*(fl[CTA] + fr[CTA]) -
-                                  lambda * (cons_r[CTA] - cons_l[CTA]));
-    flx(m, IVX, k, j, i) = 0.5 * sdetg * (alpha*(fl[CSX] + fr[CSX]) -
-                                  lambda * (cons_r[CSX] - cons_l[CSX]));
-    flx(m, IVY, k, j, i) = 0.5 * sdetg * (alpha*(fl[CSY] + fr[CSY]) -
-                                  lambda * (cons_r[CSY] - cons_l[CSY]));
-    flx(m, IVZ, k, j, i) = 0.5 * sdetg * (alpha*(fl[CSZ] + fr[CSZ]) -
-                                  lambda * (cons_r[CSZ] - cons_l[CSZ]));
+    flx(m, IDN, k, j, i) = 0.5 * sdetg * (alpha * (fl[CDN] + fr[CDN]) - lambda * (cons_r[CDN] - cons_l[CDN]));
+    flx(m, IEN, k, j, i) = 0.5 * sdetg * (alpha * (fl[CTA] + fr[CTA]) - lambda * (cons_r[CTA] - cons_l[CTA]));
+    flx(m, IVX, k, j, i) = 0.5 * sdetg * (alpha * (fl[CSX] + fr[CSX]) - lambda * (cons_r[CSX] - cons_l[CSX]));
+    flx(m, IVY, k, j, i) = 0.5 * sdetg * (alpha * (fl[CSY] + fr[CSY]) - lambda * (cons_r[CSY] - cons_l[CSY]));
+    flx(m, IVZ, k, j, i) = 0.5 * sdetg * (alpha * (fl[CSZ] + fr[CSZ]) - lambda * (cons_r[CSZ] - cons_l[CSZ]));
     // The notation here is slightly misleading, as it suggests that Ey = -Fx(By) and
     // Ez = Fx(Bz), rather than Ez = -Fx(By) and Ey = Fx(Bz). However, the appropriate
     // containers for ey and ez for each direction are passed in as arguments to this
     // function, ensuring that the result is entirely consistent.
-    ey(m, k, j, i) = -0.5*sdetg*(alpha*(bfl[iby] + bfr[iby]) -
-                          lambda * (Bu_r[iby] - Bu_l[iby]));
-    ez(m, k, j, i) = 0.5*sdetg*(alpha*(bfl[ibz] + bfr[ibz]) -
-                          lambda * (Bu_r[ibz] - Bu_l[ibz]));
+    ey(m, k, j, i) = -0.5 * sdetg * (alpha * (bfl[iby] + bfr[iby]) -  lambda * (Bu_r[iby] - Bu_l[iby]));
+    ez(m, k, j, i) =  0.5 * sdetg * (alpha * (bfl[ibz] + bfr[ibz]) -  lambda * (Bu_r[ibz] - Bu_l[ibz]));
   });
 }
 
