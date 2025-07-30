@@ -112,18 +112,19 @@ if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
 endif()
 
 #######SALVO and SAJAD modification
-if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+###if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
 #- VTune support, transparent to the user.
  find_package(VTune)
  if (VTune_FOUND)
    include_directories(${VTune_INCLUDE_DIRS})
    link_libraries(${VTune_LIBRARIES})
-   add_definitions(-DVTUNE_API_AVAILABLE)
+   add_definitions(-DVTUNE_API_AVAILABLE) ###-gline-tables-only
+   add_compile_options(-gline-tables-only) ###added with Alex at 17.july.2025 hackton3
    message(STATUS "Enabling VTune API integration for Echo. More fine-grained profiling available.")
  else()
    message(STATUS "VTune Profiler unavailable. Consider making it available at configuration time it if you plan on using VTune.")
  endif(VTune_FOUND)
-endif()
+###endif()
 
 
 #------ create configuration header file from template in /src directory -----------------
