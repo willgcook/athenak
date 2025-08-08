@@ -50,35 +50,26 @@ void PPM4(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_i
   Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
 
   //---- limit qrv and qlv to neighboring cell-centered values (CS eqn 13) ----
-  qlv = Kokkos::fmax(qlv, Kokkos::fmin(q_i, q_im1));
-  qlv = Kokkos::fmin(qlv, Kokkos::fmax(q_i, q_im1));
-  qrv = Kokkos::fmax(qrv, Kokkos::fmin(q_i, q_ip1));
-  qrv = Kokkos::fmin(qrv, Kokkos::fmax(q_i, q_ip1));
+  qlv = fmax(qlv, fmin(q_i, q_im1));
+  qlv = fmin(qlv, fmax(q_i, q_im1));
+  qrv = fmax(qrv, fmin(q_i, q_ip1));
+  qrv = fmin(qrv, fmax(q_i, q_ip1));
 
   //--- monotonize interpolated L/R states (CS eqns 14, 15) ---
-  
-  const Real qc = qrv - q_i;
-  const Real qd = qlv - q_i;
-  {
-  const bool same_sign = (qc * qd) >= 0.0;
-
-  if (same_sign) {
+  Real qc = qrv - q_i;
+  Real qd = qlv - q_i;
+  if ((qc*qd) >= 0.0) {
     qlv = q_i;
     qrv = q_i;
-    } else {
-    const Real abs_qc = Kokkos::fabs(qc);
-    const Real abs_qd = Kokkos::fabs(qd);
-
-    const bool adj_rv = abs_qc >= 2.0 * abs_qd;
-    const bool adj_lv = abs_qd >= 2.0 * abs_qc;
-
-    qrv = adj_rv ? (q_i - 2.0 * qd) : qrv;
-    qlv = adj_lv ? (q_i - 2.0 * qc) : qlv;
+  } else {
+    if (fabs(qc) >= 2.0*fabs(qd)) {
+      qrv = q_i - 2.0*qd;
     }
-   }
+    if (fabs(qd) >= 2.0*fabs(qc)) {
+      qlv = q_i - 2.0*qc;
+    }
+  }
 
-
-  
   //---- set L/R states ----
   ql_ip1 = qrv;
   qr_i   = qlv;
@@ -93,92 +84,103 @@ void PPM4(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_i
 //! reconstruction in any dimension by passing in the appropriate q_im2,...,q _ip2.
 
 KOKKOS_INLINE_FUNCTION
-void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i,
-          const Real &q_ip1, const Real &q_ip2,
-          Real &ql_ip1, Real &qr_i) {
-  // ---- Initial parabolic reconstructions ----
-  Real qlv = (7.0 * (q_i + q_im1) - (q_im2 + q_ip1)) / 12.0;
-  Real qrv = (7.0 * (q_i + q_ip1) - (q_im1 + q_ip2)) / 12.0;
+void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_ip1,
+          const Real &q_ip2, Real &ql_ip1, Real &qr_i) {
+  //---- Compute L/R values (CS eqns 12-15, PH 3.26 and 3.27) ----
+  // qlv = q at left  side of cell-center = q[i-1/2] = a_{j,-} in CS
+  // qrv = q at right side of cell-center = q[i+1/2] = a_{j,+} in CS
+  Real qlv = (7.*(q_i + q_im1) - (q_im2 + q_ip1))/12.0;
+  Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
 
-  // ---- Monotonicity limiter (left state) ----
-  Real d2qc = 3.0 * ((q_im1 + q_i) - 2.0 * qlv);
-  Real d2ql = (q_im2 + q_i) - 2.0 * q_im1;
-  Real d2qr = (q_im1 + q_ip1) - 2.0 * q_i;
+  //---- Apply CS monotonicity limiters to qrv and qlv ----
+  // approximate second derivatives at i-1/2 (PH 3.35)
+  // KGF: add the off-center quantities first to preserve FP symmetry
+  Real d2qc = 3.0*((q_im1 + q_i) - 2.0*qlv);
+  Real d2ql = (q_im2 + q_i  ) - 2.0*q_im1;
+  Real d2qr = (q_im1 + q_ip1) - 2.0*q_i;
 
+  // limit second derivative (PH 3.36)
   Real d2qlim = 0.0;
-  Real lim_slope = Kokkos::fmin(Kokkos::fabs(d2ql), Kokkos::fabs(d2qr));
-
-  const bool same_sign = (d2qc * d2ql > 0.0) && (d2qc * d2qr > 0.0);
-  if (same_sign) {
-    d2qlim = copysign(Kokkos::fmin(1.25 * lim_slope, Kokkos::fabs(d2qc)), d2qc);
-   }
-  if ((q_im1 - qlv) * (q_i - qlv) > 0.0) {
-    qlv = 0.5 * (q_i + q_im1) - d2qlim / 6.0;
+  Real lim_slope = fmin(fabs(d2ql),fabs(d2qr));
+  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  // compute limited value for qlv (PH 3.33 and 3.34)
+  if (((q_im1 - qlv)*(q_i - qlv)) > 0.0) {
+    qlv = 0.5*(q_i + q_im1) - d2qlim/6.0;
   }
 
-  // ---- Monotonicity limiter (right state) ----
-  d2qc = 3.0 * ((q_i + q_ip1) - 2.0 * qrv);
+  // approximate second derivatives at i+1/2 (PH 3.35)
+  // KGF: add the off-center quantities first to preserve FP symmetry
+  d2qc = 3.0*((q_i + q_ip1) - 2.0*qrv);
   d2ql = d2qr;
-  d2qr = (q_i + q_ip2) - 2.0 * q_ip1;
+  d2qr = (q_i + q_ip2) - 2.0*q_ip1;
 
+  // limit second derivative (PH 3.36)
   d2qlim = 0.0;
-  lim_slope = Kokkos::fmin(Kokkos::fabs(d2ql), Kokkos::fabs(d2qr));
-
-  if (same_sign) {
-  d2qlim = copysign(Kokkos::fmin(1.25 * lim_slope, Kokkos::fabs(d2qc)), d2qc);
+  lim_slope = fmin(fabs(d2ql),fabs(d2qr));
+  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  // compute limited value for qrv (PH 3.33 and 3.34)
+  if (((q_i - qrv)*(q_ip1 - qrv)) > 0.0) {
+    qrv = 0.5*(q_i + q_ip1) - d2qlim/6.0;
   }
 
-  if ((q_i - qrv) * (q_ip1 - qrv) > 0.0) {
-    qrv = 0.5 * (q_i + q_ip1) - d2qlim / 6.0;
-  }
+  //---- identify extrema, use smooth extremum limiter ----
+  // CS 20 (missing "OR"), and PH 3.31
+  Real qa = (qrv - q_i)*(q_i - qlv);
+  Real qb = (q_im1 - q_i)*(q_i - q_ip1);
+  if (qa <= 0.0 || qb <= 0.0) {
+    // approximate secnd derivates (PH 3.37)
+    // KGF: add the off-center quantities first to preserve FP symmetry
+    Real d2q  = 6.0*(qlv + qrv - 2.0*q_i);
+    Real d2qc = (q_im1 + q_ip1) - 2.0*q_i;
+    Real d2ql = (q_im2 + q_i  ) - 2.0*q_im1;
+    Real d2qr = (q_i   + q_ip2) - 2.0*q_ip1;
 
-  // ---- Extremum detection and limiting ----
-  const Real qa = (qrv - q_i) * (q_i - qlv);
-  const Real qb = (q_im1 - q_i) * (q_i - q_ip1);
+    // limit second derivatives (PH 3.38)
+    d2qlim = 0.0;
+    lim_slope = fmin(fabs(d2ql),fabs(d2qr));
+    lim_slope = fmin(fabs(d2qc),lim_slope);
+    if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0 && d2q > 0.0) {
+      d2qlim = SIGN(d2q)*fmin(1.25*lim_slope,fabs(d2q));
+    }
+    if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0 && d2q < 0.0) {
+      d2qlim = SIGN(d2q)*fmin(1.25*lim_slope,fabs(d2q));
+    }
 
-  if ((qa <= 0.0) || (qb <= 0.0)) {
-    const Real d2q  = 6.0 * (qlv + qrv - 2.0 * q_i);
-    const Real d2qc = (q_im1 + q_ip1) - 2.0 * q_i;
-    const Real d2ql = (q_im2 + q_i) - 2.0 * q_im1;
-    const Real d2qr = (q_i + q_ip2) - 2.0 * q_ip1;
-
-    const Real abs_d2q  = Kokkos::fabs(d2q);
-    const Real abs_d2qc = Kokkos::fabs(d2qc);
-    const Real abs_d2ql = Kokkos::fabs(d2ql);
-    const Real abs_d2qr = Kokkos::fabs(d2qr);
-
-    lim_slope = Kokkos::fmin(abs_d2ql, abs_d2qr);
-    lim_slope = Kokkos::fmin(abs_d2qc, lim_slope);
-
-    const bool same_sign = (d2q * d2qc > 0.0) && (d2q * d2ql > 0.0) && (d2q * d2qr > 0.0);
-    d2qlim = same_sign ? copysign(Kokkos::fmin(1.25 * lim_slope, abs_d2q), d2q) : 0.0;
-
-    const Real qmax = Kokkos::fmax(Kokkos::fabs(q_im1),
-                     Kokkos::fmax(Kokkos::fabs(q_i), Kokkos::fabs(q_ip1)));
-    const bool significant = (abs_d2q > 1.0e-12 * qmax);
-
-    const Real rho = significant ? (d2qlim / d2q) : 0.0;
-    qlv = q_i + (qlv - q_i) * rho;
-    qrv = q_i + (qrv - q_i) * rho;
-
+    // limit L/R states at extrema (PH 3.39)
+    Real rho = 0.0;
+    if ( fabs(d2q) > (1.0e-12)*fmax( fabs(q_im1), fmax(fabs(q_i),fabs(q_ip1))) ) {
+      // Limiter is not sensitive to round-off error.  Use limited slope
+      rho = d2qlim/d2q;
+    }
+    qlv = q_i + (qlv - q_i)*rho;
+    qrv = q_i + (qrv - q_i)*rho;
   } else {
-    // ---- Monotonize away from extrema ----
-    const Real qc = qrv - q_i;
-    const Real qd = qlv - q_i;
-
-  if (Kokkos::fabs(qc) >= 2.0 * Kokkos::fabs(qd)) {
-    qrv = q_i - 2.0 * qd;
+    // Monotonize again, away from extrema (CW eqn 1.10, PH 3.32)
+    Real qc = qrv - q_i;
+    Real qd = qlv - q_i;
+    if (fabs(qc) >= 2.0*fabs(qd)) {
+      qrv = q_i - 2.0*qd;
+    }
+    if (fabs(qd) >= 2.0*fabs(qc)) {
+      qlv = q_i - 2.0*qc;
+    }
   }
-  if (Kokkos::fabs(qd) >= 2.0 * Kokkos::fabs(qc)) {
-    qlv = q_i - 2.0 * qc;
-  }
-}
 
-
-  // ---- Final output ----
+  //---- set L/R states ----
   ql_ip1 = qrv;
   qr_i   = qlv;
-} 
+  return;
+}
 
 //----------------------------------------------------------------------------------------
 //! \fn PiecewiseParabolicX1()
@@ -194,8 +196,8 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
   const Real &dfloor_ = eos.dfloor;
   // TODO(jmstone): ideal gas only for now
   Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
-  if (extremum_preserving) {
-   for (int n=0; n<nvar; ++n) {
+  for (int n=0; n<nvar; ++n) {
+    if (extremum_preserving) {
       par_for_inner(member, il, iu, [&](const int i) {
         Real &qim2 = q(m,n,k,j,i-2);
         Real &qim1 = q(m,n,k,j,i-1);
@@ -213,74 +215,27 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
             qr(IEN,i  ) = fmax(qr(IEN,i  ), efloor_);
           }
         }
-      });}
+      });
     } else {
-      for (int n=0; n<nvar; ++n) {
-       par_for_inner(member, il, iu, [&](const int i) {
+      par_for_inner(member, il, iu, [&](const int i) {
         Real &qim2 = q(m,n,k,j,i-2);
         Real &qim1 = q(m,n,k,j,i-1);
         Real &qi   = q(m,n,k,j,i  );
         Real &qip1 = q(m,n,k,j,i+1);
         Real &qip2 = q(m,n,k,j,i+2);
         PPM4(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
-      });}
+      });
     }
-
+  }
   return;
 }
 
-/*KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX1(
-    TeamMember_t const &member,
-    const EOS_Data &eos,
-    const bool extremum_preserving,
-    const bool apply_floors,
-    const int m, const int k, const int j,
-    const int il, const int iu,
-    const DvceArray5D<Real> &q,
-    ScrArray2D<Real> &ql,
-    ScrArray2D<Real> &qr) {
+//----------------------------------------------------------------------------------------
+//! \fn PiecewiseParabolicX2()
+//! \brief Wrapper function for PPM reconstruction in x2-direction.
+//! This function should be called over [js-1,je+1] to get BOTH L/R states over [js,je]
 
-  const int nvar = q.extent_int(1);
-  const Real dfloor_ = eos.dfloor;
-  const Real efloor_ = eos.pfloor / (eos.gamma - 1.0); // ideal gas only
-
-  const int ni = (iu - il + 1);
-
-  // Flatten (n, i) into one index space
-  Kokkos::parallel_for(
-    Kokkos::TeamThreadRange(member, nvar * ni), [&](const int idx) {
-      const int n = idx / ni;
-      const int i = il + (idx % ni);
-
-      const Real qim2 = q(m, n, k, j, i-2);
-      const Real qim1 = q(m, n, k, j, i-1);
-      const Real qi   = q(m, n, k, j, i  );
-      const Real qip1 = q(m, n, k, j, i+1);
-      const Real qip2 = q(m, n, k, j, i+2);
-
-      if (extremum_preserving) {
-        PPMX(qim2, qim1, qi, qip1, qip2, ql(n, i+1), qr(n, i));
-      } else {
-        PPM4(qim2, qim1, qi, qip1, qip2, ql(n, i+1), qr(n, i));
-      }
-
-      if (apply_floors) {
-        if (n == IDN) {
-          ql(IDN, i+1) = Kokkos::fmax(ql(IDN, i+1), dfloor_);
-          qr(IDN, i  ) = Kokkos::fmax(qr(IDN, i  ), dfloor_);
-        }
-        if (n == IEN) {
-          ql(IEN, i+1) = Kokkos::fmax(ql(IEN, i+1), efloor_);
-          qr(IEN, i  ) = Kokkos::fmax(qr(IEN, i  ), efloor_);
-        }
-      }
-    });
-}*/
-
-
-
-/*KOKKOS_INLINE_FUNCTION
+KOKKOS_INLINE_FUNCTION
 void PiecewiseParabolicX2(TeamMember_t const &member,
      const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
      const int m, const int k, const int j, const int il, const int iu,
@@ -321,55 +276,14 @@ void PiecewiseParabolicX2(TeamMember_t const &member,
     }
   }
   return;
-}*/
-
-KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX2(TeamMember_t const &member,
-     const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
-     const int m, const int k, const int j, const int il, const int iu,
-     const DvceArray5D<Real> &q, ScrArray2D<Real> &ql_jp1, ScrArray2D<Real> &qr_j) 
-{
-  const int nvar = q.extent_int(1);
-  const int ni = iu - il + 1;   // number of i's per n
-  const Real &dfloor_ = eos.dfloor;
-  const Real efloor_ = eos.pfloor / (eos.gamma - 1.0);
-
-  // Flatten (n,i) into single index
-  par_for_inner(member, 0, nvar * ni, [&](const int idx) {
-    const int n = idx / ni;
-    const int i = il + (idx % ni);
-
-    Real &qjm2 = q(m, n, k, j-2, i);
-    Real &qjm1 = q(m, n, k, j-1, i);
-    Real &qj   = q(m, n, k, j,   i);
-    Real &qjp1 = q(m, n, k, j+1, i);
-    Real &qjp2 = q(m, n, k, j+2, i);
-
-    if (extremum_preserving) {
-      PPMX(qjm2, qjm1, qj, qjp1, qjp2, ql_jp1(n, i), qr_j(n, i));
-      if (apply_floors) {
-        if (n == IDN) {
-          ql_jp1(IDN, i) = Kokkos::fmax(ql_jp1(IDN, i), dfloor_);
-          qr_j  (IDN, i) = Kokkos::fmax(qr_j  (IDN, i), dfloor_);
-        }
-        if (n == IEN) {
-          ql_jp1(IEN, i) = Kokkos::fmax(ql_jp1(IEN, i), efloor_);
-          qr_j  (IEN, i) = Kokkos::fmax(qr_j  (IEN, i), efloor_);
-        }
-      }
-    } else {
-      PPM4(qjm2, qjm1, qj, qjp1, qjp2, ql_jp1(n, i), qr_j(n, i));
-    }
-  });
 }
-
 
 //----------------------------------------------------------------------------------------
 //! \fn PiecewiseParabolicX3()
 //! \brief Wrapper function for PPM reconstruction in x3-direction.
 //! This function should be called over [ks-1,ke+1] to get BOTH L/R states over [ks,ke]
 
-/*KOKKOS_INLINE_FUNCTION
+KOKKOS_INLINE_FUNCTION
 void PiecewiseParabolicX3(TeamMember_t const &member,
      const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
      const int m, const int k, const int j, const int il, const int iu,
@@ -410,41 +324,5 @@ void PiecewiseParabolicX3(TeamMember_t const &member,
     }
   }
   return;
-}*/
-
-KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX3(TeamMember_t const &member,
-     const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
-     const int m, const int k, const int j, const int il, const int iu,
-     const DvceArray5D<Real> &q, ScrArray2D<Real> &ql_kp1, ScrArray2D<Real> &qr_k) {
-  
-  const int nvar = q.extent_int(1);
-  const Real dfloor_ = eos.dfloor;
-  const Real efloor_ = eos.pfloor/(eos.gamma - 1.0); // TODO: ideal gas only for now
-
-  // Combine the loops for better memory access patterns
-  par_for_inner(member, il, iu, [&](const int i) {
-    for (int n=0; n<nvar; ++n) {
-      Real &qkm2 = q(m,n,k-2,j,i);
-      Real &qkm1 = q(m,n,k-1,j,i);
-      Real &qk   = q(m,n,k  ,j,i);
-      Real &qkp1 = q(m,n,k+1,j,i);
-      Real &qkp2 = q(m,n,k+2,j,i);
-      
-      if (extremum_preserving) {
-        PPMX(qkm2, qkm1, qk, qkp1, qkp2, ql_kp1(n,i), qr_k(n,i));
-        
-        if (apply_floors) {
-          // Use ternary operators to avoid branching where possible
-          ql_kp1(n,i) = (n == IDN) ? fmax(ql_kp1(n,i), dfloor_) : 
-                       ((n == IEN) ? fmax(ql_kp1(n,i), efloor_) : ql_kp1(n,i));
-          qr_k(n,i) = (n == IDN) ? fmax(qr_k(n,i), dfloor_) : 
-                     ((n == IEN) ? fmax(qr_k(n,i), efloor_) : qr_k(n,i));
-        }
-      } else {
-        PPM4(qkm2, qkm1, qk, qkp1, qkp2, ql_kp1(n,i), qr_k(n,i));
-      }
-    }
-  });
 }
 #endif // RECONSTRUCT_PPM_HPP_
