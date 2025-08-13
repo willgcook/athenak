@@ -34,49 +34,9 @@
 
 #include "athena.hpp"
 
-//----------------------------------------------------------------------------------------
-//! \fn PPM4()
-//! \brief Original PPM (Colella & Woodward) parabolic reconstruction.  Returns
-//! interpolated values at L/R edges of cell i, that is ql(i+1) and qr(i). Works for
-//! reconstruction in any dimension by passing in the appropriate q_im2,...,q _ip2.
-
-KOKKOS_INLINE_FUNCTION
-void PPM4(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_ip1,
-          const Real &q_ip2, Real &ql_ip1, Real &qr_i) {
-  //---- Interpolate L/R values (CS eqn 16, PH 3.26 and 3.27) ----
-  // qlv = q at left  side of cell-center = q[i-1/2] = a_{j,-} in CS
-  // qrv = q at right side of cell-center = q[i+1/2] = a_{j,+} in CS
-  Real qlv = (7.*(q_i + q_im1) - (q_im2 + q_ip1))/12.0;
-  Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
-
-  //---- limit qrv and qlv to neighboring cell-centered values (CS eqn 13) ----
-  qlv = fmax(qlv, fmin(q_i, q_im1));
-  qlv = fmin(qlv, fmax(q_i, q_im1));
-  qrv = fmax(qrv, fmin(q_i, q_ip1));
-  qrv = fmin(qrv, fmax(q_i, q_ip1));
-
-  //--- monotonize interpolated L/R states (CS eqns 14, 15) ---
-  Real qc = qrv - q_i;
-  Real qd = qlv - q_i;
-  if ((qc*qd) >= 0.0) {
-    qlv = q_i;
-    qrv = q_i;
-  } else {
-    if (fabs(qc) >= 2.0*fabs(qd)) {
-      qrv = q_i - 2.0*qd;
-    }
-    if (fabs(qd) >= 2.0*fabs(qc)) {
-      qlv = q_i - 2.0*qc;
-    }
-  }
-
-  //---- set L/R states ----
-  ql_ip1 = qrv;
-  qr_i   = qlv;
-  return;
-}
 
 
+//========================start of modifications subview ==================================@sajad
 
 template <class SubView>
 KOKKOS_INLINE_FUNCTION
@@ -123,11 +83,6 @@ void PPM4_subView(const SubView& Q_, Real& ql_ip1, Real& qr_i){
 }
 
 
-//----------------------------------------------------------------------------------------
-//! \fn PPMX()
-//! \brief PPM parabolic reconstruction with Colella & Sekora limiters.  Returns
-//! interpolated values at L/R edges of cell i, that is ql(i+1) and qr(i). Works for
-//! reconstruction in any dimension by passing in the appropriate q_im2,...,q _ip2.
 
 //Kokkos::Subview<Real> &Q_ = {const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_ip1,const Real &q_ip2}
 template <class SubView>
@@ -236,6 +191,165 @@ void PPMX_subView(const SubView& Q_, Real& ql_ip1, Real& qr_i){
   return;
 }
 
+
+template <class SubView>
+KOKKOS_FORCEINLINE_FUNCTION
+void PPMX_subView_fast(const SubView& Q_in, Real& ql_ip1, Real& qr_i){
+  static_assert(SubView::rank == 1, "expect length-5 subview");
+
+  // Rebind to add Unmanaged|RandomAccess traits (optional but can help perf)
+  using device_type = typename SubView::device_type;
+  using layout_type = typename SubView::array_layout;           // likely LayoutStride
+  using value_const = typename SubView::const_value_type;
+  using RAView = Kokkos::View< value_const*, layout_type, device_type,
+                               Kokkos::MemoryTraits<Kokkos::Unmanaged |
+                                                    Kokkos::RandomAccess> >;
+
+  const RAView Q_(Q_in);    // wrap without changing data
+
+  // ---- load 5 values ----
+  const Real q_im2 = Q_(0);
+  const Real q_im1 = Q_(1);
+  const Real q_i   = Q_(2);
+  const Real q_ip1 = Q_(3);
+  const Real q_ip2 = Q_(4);
+
+  // ---- 
+  Real qlv = (7.*(q_i + q_im1) - (q_im2 + q_ip1))/12.0;
+  Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
+
+  Real d2qc = 3.0*((q_im1 + q_i) - 2.0*qlv);
+  Real d2ql = (q_im2 + q_i  ) - 2.0*q_im1;
+  Real d2qr = (q_im1 + q_ip1) - 2.0*q_i;
+
+  Real d2qlim = 0.0;
+  Real lim_slope = fmin(fabs(d2ql),fabs(d2qr));
+  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (((q_im1 - qlv)*(q_i - qlv)) > 0.0) {
+    qlv = 0.5*(q_i + q_im1) - d2qlim/6.0;
+  }
+
+  d2qc = 3.0*((q_i + q_ip1) - 2.0*qrv);
+  d2ql = d2qr;
+  d2qr = (q_i + q_ip2) - 2.0*q_ip1;
+
+  d2qlim = 0.0;
+  lim_slope = fmin(fabs(d2ql),fabs(d2qr));
+  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
+    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+  }
+  if (((q_i - qrv)*(q_ip1 - qrv)) > 0.0) {
+    qrv = 0.5*(q_i + q_ip1) - d2qlim/6.0;
+  }
+
+  Real qa = (qrv - q_i)*(q_i - qlv);
+  Real qb = (q_im1 - q_i)*(q_i - q_ip1);
+  if (qa <= 0.0 || qb <= 0.0) {
+    Real d2q  = 6.0*(qlv + qrv - 2.0*q_i);
+    Real d2qc2 = (q_im1 + q_ip1) - 2.0*q_i;
+    Real d2ql2 = (q_im2 + q_i  ) - 2.0*q_im1;
+    Real d2qr2 = (q_i   + q_ip2) - 2.0*q_ip1;
+
+    d2qlim = 0.0;
+    lim_slope = fmin(fabs(d2ql2),fabs(d2qr2));
+    lim_slope = fmin(fabs(d2qc2),lim_slope);
+    if (d2qc2 > 0.0 && d2ql2 > 0.0 && d2qr2 > 0.0 && d2q > 0.0) {
+      d2qlim = SIGN(d2q)*fmin(1.25*lim_slope,fabs(d2q));
+    }
+    if (d2qc2 < 0.0 && d2ql2 < 0.0 && d2qr2 < 0.0 && d2q < 0.0) {
+      d2qlim = SIGN(d2q)*fmin(1.25*lim_slope,fabs(d2q));
+    }
+
+    Real rho = 0.0;
+    if ( fabs(d2q) > (1.0e-12)*fmax( fabs(q_im1), fmax(fabs(q_i),fabs(q_ip1))) ) {
+      rho = d2qlim/d2q;
+    }
+    qlv = q_i + (qlv - q_i)*rho;
+    qrv = q_i + (qrv - q_i)*rho;
+  } else {
+    Real qc = qrv - q_i;
+    Real qd = qlv - q_i;
+    if (fabs(qc) >= 2.0*fabs(qd)) { qrv = q_i - 2.0*qd; }
+    if (fabs(qd) >= 2.0*fabs(qc)) { qlv = q_i - 2.0*qc; }
+  }
+
+  ql_ip1 = qrv;
+  qr_i   = qlv;
+}
+
+//==================================end of modifications==================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//----------------------------------------------------------------------------------------
+//! \fn PPM4()
+//! \brief Original PPM (Colella & Woodward) parabolic reconstruction.  Returns
+//! interpolated values at L/R edges of cell i, that is ql(i+1) and qr(i). Works for
+//! reconstruction in any dimension by passing in the appropriate q_im2,...,q _ip2.
+
+KOKKOS_INLINE_FUNCTION
+void PPM4(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_ip1,
+          const Real &q_ip2, Real &ql_ip1, Real &qr_i) {
+  //---- Interpolate L/R values (CS eqn 16, PH 3.26 and 3.27) ----
+  // qlv = q at left  side of cell-center = q[i-1/2] = a_{j,-} in CS
+  // qrv = q at right side of cell-center = q[i+1/2] = a_{j,+} in CS
+  Real qlv = (7.*(q_i + q_im1) - (q_im2 + q_ip1))/12.0;
+  Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
+
+  //---- limit qrv and qlv to neighboring cell-centered values (CS eqn 13) ----
+  qlv = fmax(qlv, fmin(q_i, q_im1));
+  qlv = fmin(qlv, fmax(q_i, q_im1));
+  qrv = fmax(qrv, fmin(q_i, q_ip1));
+  qrv = fmin(qrv, fmax(q_i, q_ip1));
+
+  //--- monotonize interpolated L/R states (CS eqns 14, 15) ---
+  Real qc = qrv - q_i;
+  Real qd = qlv - q_i;
+  if ((qc*qd) >= 0.0) {
+    qlv = q_i;
+    qrv = q_i;
+  } else {
+    if (fabs(qc) >= 2.0*fabs(qd)) {
+      qrv = q_i - 2.0*qd;
+    }
+    if (fabs(qd) >= 2.0*fabs(qc)) {
+      qlv = q_i - 2.0*qc;
+    }
+  }
+
+  //---- set L/R states ----
+  ql_ip1 = qrv;
+  qr_i   = qlv;
+  return;
+}
+
+
+//----------------------------------------------------------------------------------------
+//! \fn PPMX()
+//! \brief PPM parabolic reconstruction with Colella & Sekora limiters.  Returns
+//! interpolated values at L/R edges of cell i, that is ql(i+1) and qr(i). Works for
+//! reconstruction in any dimension by passing in the appropriate q_im2,...,q _ip2.
+
 KOKKOS_INLINE_FUNCTION
 void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_ip1,
           const Real &q_ip2, Real &ql_ip1, Real &qr_i) {
@@ -334,6 +448,14 @@ void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_i
   qr_i   = qlv;
   return;
 }
+
+
+
+
+
+
+
+
 
 //----------------------------------------------------------------------------------------
 //! \fn PiecewiseParabolicX1()
@@ -498,7 +620,7 @@ void PiecewiseParabolicX2(TeamMember_t const &member,
       if(extremum_preserving)
       {
         
-        PPMX_subView(window, ql_jp1(n,i), qr_j(n,i));
+        PPMX_subView_fast(window, ql_jp1(n,i), qr_j(n,i));
         if(apply_floors){
           if(n==IDN){
             ql_jp1(IDN,i) = fmax(ql_jp1(IDN,i), dfloor_);
@@ -585,7 +707,7 @@ void PiecewiseParabolicX3(TeamMember_t const &member,
       auto window = Kokkos::subview(Q_, Kokkos::ALL(), i); 
       if(extremum_preserving)
       {
-        PPMX_subView(window, ql_kp1(n,i), qr_k(n,i));//Kokkos::Subview<Real> &Q_
+        PPMX_subView_fast(window, ql_kp1(n,i), qr_k(n,i));//Kokkos::Subview<Real> &Q_
         //PPMX(qkm2, qkm1, qk, qkp1, qkp2, ql_kp1(n,i), qr_k(n,i));
         if (apply_floors) {
           if (n==IDN) {
