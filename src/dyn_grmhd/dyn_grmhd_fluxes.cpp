@@ -84,77 +84,56 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
   } else {
     jl = js-1, ju = je+1, kl = ks-1, ku = ke+1;
   }
-
   int il = is, iu = ie+1;
   if (use_fofc) { il = is-1, iu = ie+2; }
-
 
   par_for_outer("dyngrflux_x1",DevExeSpace(), scr_size, scr_level,
       0, nmb1, kl, ku, jl, ju,
   KOKKOS_LAMBDA(TeamMember_t member, const int m, const int k, const int j) {
-    auto myTS = member.team_scratch(scr_level);
+    ScrArray2D<Real> wl(member.team_scratch(scr_level), nvars, ncells1);
+    ScrArray2D<Real> wr(member.team_scratch(scr_level), nvars, ncells1);
+    ScrArray2D<Real> bl(member.team_scratch(scr_level), 3, ncells1);
+    ScrArray2D<Real> br(member.team_scratch(scr_level), 3, ncells1);
 
-    // Reconstruct qR[i] and qL[i+1] (ws)
-    ScrArray2D<Real> wl(myTS, nvars, ncells1);
-    ScrArray2D<Real> wr(myTS, nvars, ncells1);
+    // Reconstruct qR[i] and qL[i+1]
     switch (recon_method_) {
       case ReconstructionMethod::dc:
         DonorCellX1(member, m, k, j, il-1, iu, w0_, wl, wr);
-        break;
-      case ReconstructionMethod::plm:
-        PiecewiseLinearX1(member, m, k, j, il-1, iu, w0_, wl, wr);
-        break;
-      // JF: These higher-order reconstruction methods all need EOS_Data to calculate a
-      // floor. However, it isn't used by DynGRMHD at all.
-      case ReconstructionMethod::ppm4:
-      case ReconstructionMethod::ppmx:
-        PiecewiseParabolicX1(member,eos_,extrema,false, m, k, j, il-1, iu, w0_, wl, wr);
-        break;
-      case ReconstructionMethod::wenoz:
-        WENOZX1(member, eos_, false, m, k, j, il-1, iu, w0_, wl, wr);
-        break;
-      default:
-        break;
-    }
-
-    // Reconstruct qR[i] and qL[i+1] (bs)
-    ScrArray2D<Real> bl(myTS, 3    , ncells1);
-    ScrArray2D<Real> br(myTS, 3    , ncells1);
-    switch (recon_method_) {
-      case ReconstructionMethod::dc:
         DonorCellX1(member, m, k, j, il-1, iu, b0_, bl, br);
         break;
       case ReconstructionMethod::plm:
+        PiecewiseLinearX1(member, m, k, j, il-1, iu, w0_, wl, wr);
         PiecewiseLinearX1(member, m, k, j, il-1, iu, b0_, bl, br);
         break;
       // JF: These higher-order reconstruction methods all need EOS_Data to calculate a
       // floor. However, it isn't used by DynGRMHD at all.
       case ReconstructionMethod::ppm4:
       case ReconstructionMethod::ppmx:
+        PiecewiseParabolicX1(member,eos_,extrema,false, m, k, j, il-1, iu, w0_, wl, wr);
         PiecewiseParabolicX1(member,eos_,extrema,false, m, k, j, il-1, iu, b0_, bl, br);
         break;
       case ReconstructionMethod::wenoz:
+        WENOZX1(member, eos_, false, m, k, j, il-1, iu, w0_, wl, wr);
         WENOZX1(member, eos_, false, m, k, j, il-1, iu, b0_, bl, br);
         break;
       default:
         break;
     }
-
     // Sync all threads in the team so that scratch memory is consistent
     member.team_barrier();
 
     // compute fluxes over [is,ie+1]
     auto &dyn_eos = dyn_eos_;
-    auto &indcs   = indcs_;
-    auto &size    = size_;
-    auto &coord   = coord_;
-    auto &flx1    = flx1_;
-    auto &bx      = bx_;
-    auto &e31     = e31_;
-    auto &e21     = e21_;
-    auto &nhyd_   = nhyd;
-    auto nscal_   = nvars - nhyd;
-    auto &adm_    = adm;
+    auto &indcs = indcs_;
+    auto &size = size_;
+    auto &coord = coord_;
+    auto &flx1 = flx1_;
+    auto &bx = bx_;
+    auto &e31 = e31_;
+    auto &e21 = e21_;
+    auto &nhyd_ = nhyd;
+    auto nscal_ = nvars - nhyd;
+    auto &adm_ = adm;
     //int il = is; int iu = ie+1;
     if constexpr (rsolver_method_ == DynGRMHD_RSolver::llf_dyngr) {
       LLF_DYNGR<IVX>(member, dyn_eos, indcs, size, coord, m, k, j, il, iu,
@@ -171,14 +150,11 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
     if (nvars > nhyd) {
       for (int n=nhyd; n<nvars; ++n) {
         par_for_inner(member, il, iu, [&](const int i) {
-          auto test = flx1(m,IDN,k,j,i);
-//          if (flx1(m,IDN,k,j,i) >= 0.0) {
-//            flx1(m,n,k,j,i) = flx1(m,IDN,k,j,i)*wl(n,i);
-//          } else {
-//            flx1(m,n,k,j,i) = flx1(m,IDN,k,j,i)*wr(n,i);
-//          }
-          flx1(m,n,k,j,i) = test * ((test >=0)? wl(n,i):wr(n,i));
-
+          if (flx1(m,IDN,k,j,i) >= 0.0) {
+            flx1(m,n,k,j,i) = flx1(m,IDN,k,j,i)*wl(n,i);
+          } else {
+            flx1(m,n,k,j,i) = flx1(m,IDN,k,j,i)*wr(n,i);
+          }
         });
       }
     }
@@ -192,7 +168,7 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
     scr_size = ScrArray2D<Real>::shmem_size(nvars, ncells1) * 3
              + ScrArray2D<Real>::shmem_size(3, ncells1) * 3;
     auto flx2_ = pmy_pack->pmhd->uflx.x2f;
-    auto &by_  = pmy_pack->pmhd->b0.x2f;
+    auto &by_ = pmy_pack->pmhd->b0.x2f;
     auto &e12_ = pmy_pack->pmhd->e1x2;
     auto &e32_ = pmy_pack->pmhd->e3x2;
 
@@ -243,8 +219,10 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
           // a floor. However, it isn't used by DynGRMHD.
           case ReconstructionMethod::ppm4:
           case ReconstructionMethod::ppmx:
-            PiecewiseParabolicX2(member,eos_,extrema,false, m, k, j, is-1, ie+1, w0_, wl_jp1, wr);
-            PiecewiseParabolicX2(member,eos_,extrema,false, m, k, j, is-1, ie+1, b0_, bl_jp1, br);
+            PiecewiseParabolicX2(member,eos_,extrema,false, m, k, j, is-1, ie+1,
+                                 w0_, wl_jp1, wr);
+            PiecewiseParabolicX2(member,eos_,extrema,false, m, k, j, is-1, ie+1,
+                                 b0_, bl_jp1, br);
             break;
           case ReconstructionMethod::wenoz:
             WENOZX2(member, eos_, false, m, k, j, is-1, ie+1, w0_, wl_jp1, wr);
@@ -284,13 +262,11 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
         if (nvars > nhyd) {
           for (int n=nhyd; n<nvars; ++n) {
             par_for_inner(member, is-1, ie+1, [&](const int i) {
-              auto test = flx2(m,IDN,k,j,i);
-              flx2(m,n,k,j,i) = test * ( (test >=0) ? wl(n,i) : wr(n,i) );
-//              if (flx2(m,IDN,k,j,i) >= 0.0) {
-//                flx2(m,n,k,j,i) = flx2(m,IDN,k,j,i)*wl(n,i);
-//              } else {
-//                flx2(m,n,k,j,i) = flx2(m,IDN,k,j,i)*wr(n,i);
-//              }
+              if (flx2(m,IDN,k,j,i) >= 0.0) {
+                flx2(m,n,k,j,i) = flx2(m,IDN,k,j,i)*wl(n,i);
+              } else {
+                flx2(m,n,k,j,i) = flx2(m,IDN,k,j,i)*wr(n,i);
+              }
             });
           }
         }
@@ -351,8 +327,10 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
           // a floor. However, it isn't used by DynGRMHD.
           case ReconstructionMethod::ppm4:
           case ReconstructionMethod::ppmx:
-            PiecewiseParabolicX3(member,eos_,extrema,false, m, k, j, is-1, ie+1, w0_, wl_kp1, wr);
-            PiecewiseParabolicX3(member,eos_,extrema,false, m, k, j, is-1, ie+1, b0_, bl_kp1, br);
+            PiecewiseParabolicX3(member,eos_,extrema,false, m, k, j, is-1, ie+1,
+                                 w0_, wl_kp1, wr);
+            PiecewiseParabolicX3(member,eos_,extrema,false, m, k, j, is-1, ie+1,
+                                 b0_, bl_kp1, br);
             break;
           case ReconstructionMethod::wenoz:
             WENOZX3(member, eos_, false, m, k, j, is-1, ie+1, w0_, wl_kp1, wr);
@@ -392,13 +370,11 @@ TaskStatus DynGRMHDPS<EOSPolicy, ErrorPolicy>::CalcFluxes(Driver *pdriver, int s
         if (nvars > nhyd) {
           for (int n=nhyd; n<nvars; ++n) {
             par_for_inner(member, is-1, ie+1, [&](const int i) {
-              auto test = flx3(m,IDN,k,j,i);
-              flx3(m,n,k,j,i) = test * ( (test >= 0) ? wl(n,i) : wr(n,i) );
-//              if (flx3(m,IDN,k,j,i) >= 0.0) {
-//                flx3(m,n,k,j,i) = flx3(m,IDN,k,j,i)*wl(n,i);
-//              } else {
-//                flx3(m,n,k,j,i) = flx3(m,IDN,k,j,i)*wr(n,i);
-//              }
+              if (flx3(m,IDN,k,j,i) >= 0.0) {
+                flx3(m,n,k,j,i) = flx3(m,IDN,k,j,i)*wl(n,i);
+              } else {
+                flx3(m,n,k,j,i) = flx3(m,IDN,k,j,i)*wr(n,i);
+              }
             });
           }
         }
