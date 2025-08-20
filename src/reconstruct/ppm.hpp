@@ -111,12 +111,14 @@ void PPMX_subView(const SubView& Q_, Real& ql_ip1, Real& qr_i){
   // limit second derivative (PH 3.36)
   Real d2qlim = 0.0;
   Real lim_slope = fmin(fabs(d2ql),fabs(d2qr));
-  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
-    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-  }
-  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
-    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-  }
+  const bool test=(d2qc*d2ql>0.0)&&(d2qc*d2qr>0.0);
+  if (test) d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+//  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
+//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+//  }
+//  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
+//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
+//  }
   // compute limited value for qlv (PH 3.33 and 3.34)
   if (((q_im1 - qlv)*(q_i - qlv)) > 0.0) {
     qlv = 0.5*(q_i + q_im1) - d2qlim/6.0;
