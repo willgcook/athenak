@@ -566,9 +566,9 @@ void PiecewiseParabolicX2(TeamMember_t const &member,
   const Real &dfloor_ = eos.dfloor;
   // TODO(jmstone): ideal gas only for now
   Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
-  const bool do_rho_floor = apply_floors && (n==IDN);
-  const bool do_nrg_floor = apply_floors && (n==IEN);
   for(int n=0; n<nvar; ++n){
+    const bool do_rho_floor = apply_floors && (n==IDN);
+    const bool do_nrg_floor = apply_floors && (n==IEN);
     auto Q_ = Kokkos::subview(q, m, n, k, Kokkos::make_pair(j-2, j+3),Kokkos::ALL());
     par_for_inner(member, il, iu, [&](const int i){
       auto window = Kokkos::subview(Q_, Kokkos::ALL(), i); 
