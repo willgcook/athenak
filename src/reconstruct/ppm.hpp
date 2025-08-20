@@ -463,7 +463,7 @@ void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_i
 //! This function should be called over [is-1,ie+1] to get BOTH L/R states over [is,ie]
 
 KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX1(TeamMember_t const &member,
+void PiecewiseParabolicX1_old(TeamMember_t const &member,
      const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
      const int m, const int k, const int j, const int il, const int iu,
      const DvceArray5D<Real> &q, ScrArray2D<Real> &ql, ScrArray2D<Real> &qr) {
@@ -508,7 +508,7 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
 // ----------------------subview version of PiecewiseParabolicX1------------------------
 
 KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX1_sub(TeamMember_t const &member,
+void PiecewiseParabolicX1(TeamMember_t const &member,
      const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
      const int m, const int k, const int j, const int il, const int iu,
      const DvceArray5D<Real> &q, ScrArray2D<Real> &ql, ScrArray2D<Real> &qr) {
@@ -517,15 +517,11 @@ void PiecewiseParabolicX1_sub(TeamMember_t const &member,
   // TODO(jmstone): ideal gas only for now
   Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
   for(int n=0; n<nvar; ++n){
-
-
-    auto Q_ = Kokkos::subview(q, m, n, k, j ,Kokkos::ALL()); 
-     
+//    auto Q_ = Kokkos::subview(q, m, n, k, j ,Kokkos::ALL()); 
     //if (extremum_preserving) {
     par_for_inner(member, il, iu, [&](const int i){
-       auto window = Kokkos::subview(Q_,Kokkos::make_pair(i-2, i+3));
-      if(extremum_preserving)
-      {
+      auto window = Kokkos::subview(q,m,n,k,j,Kokkos::make_pair(i-2, i+3));
+      if(extremum_preserving)  {
         PPMX_subView(window, ql(n,i+1), qr(n,i));//Kokkos::Subview<Real> &Q_
         ///PPMX(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
         if(apply_floors){
