@@ -214,7 +214,7 @@ void PPMX_subView_fast(const SubView& Q_in, Real& ql_ip1, Real& qr_i){
   const Real q_ip1 = Q_(3);
   const Real q_ip2 = Q_(4);
 
-  // ---- 
+  // ----
   Real qlv = (7.*(q_i + q_im1) - (q_im2 + q_ip1))/12.0;
   Real qrv = (7.*(q_i + q_ip1) - (q_im1 + q_ip2))/12.0;
 
@@ -226,13 +226,6 @@ void PPMX_subView_fast(const SubView& Q_in, Real& ql_ip1, Real& qr_i){
   Real lim_slope = fmin(fabs(d2ql),fabs(d2qr));
   bool test=(d2qc*d2ql>0.0)&&(d2qc*d2qr>0.0);
   if (test) d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-
-//  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
-//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-//  }
-//  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
-//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-//  }
   if (((q_im1 - qlv)*(q_i - qlv)) > 0.0) {
     qlv = 0.5*(q_i + q_im1) - d2qlim/6.0;
   }
@@ -246,13 +239,6 @@ void PPMX_subView_fast(const SubView& Q_in, Real& ql_ip1, Real& qr_i){
 
   test=(d2qc*d2ql>0.0)&&(d2qc*d2qr>0.0);
   if (test) d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-
-//  if (d2qc > 0.0 && d2ql > 0.0 && d2qr > 0.0) {
-//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-//  }
-//  if (d2qc < 0.0 && d2ql < 0.0 && d2qr < 0.0) {
-//    d2qlim = SIGN(d2qc)*fmin(1.25*lim_slope,fabs(d2qc));
-//  }
   if (((q_i - qrv)*(q_ip1 - qrv)) > 0.0) {
     qrv = 0.5*(q_i + q_ip1) - d2qlim/6.0;
   }
@@ -291,22 +277,6 @@ void PPMX_subView_fast(const SubView& Q_in, Real& ql_ip1, Real& qr_i){
   ql_ip1 = qrv;
   qr_i   = qlv;
 }
-
-//==================================end of modifications==================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 //----------------------------------------------------------------------------------------
 //! \fn PPM4()
@@ -456,62 +426,6 @@ void PPMX(const Real &q_im2, const Real &q_im1, const Real &q_i, const Real &q_i
   return;
 }
 
-
-
-
-
-
-
-
-
-//----------------------------------------------------------------------------------------
-//! \fn PiecewiseParabolicX1()
-//! \brief Wrapper function for PPM reconstruction in x1-direction.
-//! This function should be called over [is-1,ie+1] to get BOTH L/R states over [is,ie]
-
-KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX1_old(TeamMember_t const &member,
-     const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
-     const int m, const int k, const int j, const int il, const int iu,
-     const DvceArray5D<Real> &q, ScrArray2D<Real> &ql, ScrArray2D<Real> &qr) {
-  int nvar = q.extent_int(1);
-  const Real &dfloor_ = eos.dfloor;
-  // TODO(jmstone): ideal gas only for now
-  Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
-  for (int n=0; n<nvar; ++n) {
-    if (extremum_preserving) {
-      par_for_inner(member, il, iu, [&](const int i) {
-        Real &qim2 = q(m,n,k,j,i-2);
-        Real &qim1 = q(m,n,k,j,i-1);
-        Real &qi   = q(m,n,k,j,i  );
-        Real &qip1 = q(m,n,k,j,i+1);
-        Real &qip2 = q(m,n,k,j,i+2);
-        PPMX(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
-        if (apply_floors) {
-          if (n==IDN) {
-            ql(IDN,i+1) = fmax(ql(IDN,i+1), dfloor_);
-            qr(IDN,i  ) = fmax(qr(IDN,i  ), dfloor_);
-          }
-          if (n==IEN) {
-            ql(IEN,i+1) = fmax(ql(IEN,i+1), efloor_);
-            qr(IEN,i  ) = fmax(qr(IEN,i  ), efloor_);
-          }
-        }
-      });
-    } else {
-      par_for_inner(member, il, iu, [&](const int i) {
-        Real &qim2 = q(m,n,k,j,i-2);
-        Real &qim1 = q(m,n,k,j,i-1);
-        Real &qi   = q(m,n,k,j,i  );
-        Real &qip1 = q(m,n,k,j,i+1);
-        Real &qip2 = q(m,n,k,j,i+2);
-        PPM4(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
-      });
-    }
-  }
-  return;
-}
-
 // ----------------------subview version of PiecewiseParabolicX1------------------------
 
 KOKKOS_INLINE_FUNCTION
@@ -524,13 +438,10 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
   // TODO(jmstone): ideal gas only for now
   Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
   for(int n=0; n<nvar; ++n){
-//    auto Q_ = Kokkos::subview(q, m, n, k, j ,Kokkos::ALL()); 
-    //if (extremum_preserving) {
     par_for_inner(member, il, iu, [&](const int i){
       auto window = Kokkos::subview(q,m,n,k,j,Kokkos::make_pair(i-2, i+3));
       if(extremum_preserving)  {
         PPMX_subView(window, ql(n,i+1), qr(n,i));//Kokkos::Subview<Real> &Q_
-        ///PPMX(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
         if(apply_floors){
           if(n==IDN){
             ql(IDN,i+1) = fmax(ql(IDN,i+1), dfloor_);
@@ -543,9 +454,7 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
         }
       }
       else{
-        //
         PPM4_subView(window,ql(n,i+1), qr(n,i));
-        //PPM4(qim2, qim1, qi, qip1, qip2, ql(n,i+1), qr(n,i));
       }
     });
   }
@@ -571,7 +480,7 @@ void PiecewiseParabolicX2(TeamMember_t const &member,
     const bool do_nrg_floor = apply_floors && (n==IEN);
     auto Q_ = Kokkos::subview(q, m, n, k, Kokkos::make_pair(j-2, j+3),Kokkos::ALL());
     par_for_inner(member, il, iu, [&](const int i){
-      auto window = Kokkos::subview(Q_, Kokkos::ALL(), i); 
+      auto window = Kokkos::subview(Q_, Kokkos::ALL(), i);
       if(extremum_preserving)      {
         PPMX_subView_fast(window, ql_jp1(n,i), qr_j(n,i));
         if(do_rho_floor){
