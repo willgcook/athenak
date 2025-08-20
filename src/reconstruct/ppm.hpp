@@ -556,54 +556,6 @@ void PiecewiseParabolicX1(TeamMember_t const &member,
 //! \fn PiecewiseParabolicX2()
 //! \brief Wrapper function for PPM reconstruction in x2-direction.
 //! This function should be called over [js-1,je+1] to get BOTH L/R states over [js,je]
-
-
-KOKKOS_INLINE_FUNCTION
-void PiecewiseParabolicX2_old(TeamMember_t const &member,
-     const EOS_Data &eos, const bool extremum_preserving, const bool apply_floors,
-     const int m, const int k, const int j, const int il, const int iu,
-     const DvceArray5D<Real> &q, ScrArray2D<Real> &ql_jp1, ScrArray2D<Real> &qr_j) {
-  int nvar = q.extent_int(1);
-  const Real &dfloor_ = eos.dfloor;
-  // TODO(jmstone): ideal gas only for now
-  Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
-  for (int n=0; n<nvar; ++n) {
-    if (extremum_preserving) {
-      par_for_inner(member, il, iu, [&](const int i) {
-        Real &qjm2 = q(m,n,k,j-2,i);
-        Real &qjm1 = q(m,n,k,j-1,i);
-        Real &qj   = q(m,n,k,j  ,i);
-        Real &qjp1 = q(m,n,k,j+1,i);
-        Real &qjp2 = q(m,n,k,j+2,i);
-        PPMX(qjm2, qjm1, qj, qjp1, qjp2, ql_jp1(n,i), qr_j(n,i));
-        if (apply_floors) {
-          if (n==IDN) {
-            ql_jp1(IDN,i) = fmax(ql_jp1(IDN,i), dfloor_);
-            qr_j  (IDN,i) = fmax(qr_j  (IDN,i), dfloor_);
-          }
-          if (n==IEN) {
-            ql_jp1(IEN,i) = fmax(ql_jp1(IEN,i), efloor_);
-            qr_j  (IEN,i) = fmax(qr_j  (IEN,i), efloor_);
-          }
-        }
-      });
-    } else {
-      par_for_inner(member, il, iu, [&](const int i) {
-        Real &qjm2 = q(m,n,k,j-2,i);
-        Real &qjm1 = q(m,n,k,j-1,i);
-        Real &qj   = q(m,n,k,j  ,i);
-        Real &qjp1 = q(m,n,k,j+1,i);
-        Real &qjp2 = q(m,n,k,j+2,i);
-        PPM4(qjm2, qjm1, qj, qjp1, qjp2, ql_jp1(n,i), qr_j(n,i));
-      });
-    }
-  }
-  return;
-}
-
-
-
-
 //--------------------------------subview version of PiecewiseParabolicX2
 KOKKOS_INLINE_FUNCTION
 void PiecewiseParabolicX2(TeamMember_t const &member,
@@ -614,29 +566,24 @@ void PiecewiseParabolicX2(TeamMember_t const &member,
   const Real &dfloor_ = eos.dfloor;
   // TODO(jmstone): ideal gas only for now
   Real efloor_ = eos.pfloor/(eos.gamma - 1.0);
+  const bool do_rho_floor = apply_floors && (n==IDN);
+  const bool do_nrg_floor = apply_floors && (n==IEN);
   for(int n=0; n<nvar; ++n){
-    
-    auto Q_ = Kokkos::subview(q, m, n, k, Kokkos::make_pair(j-2, j+3),Kokkos::ALL());  
-
+    auto Q_ = Kokkos::subview(q, m, n, k, Kokkos::make_pair(j-2, j+3),Kokkos::ALL());
     par_for_inner(member, il, iu, [&](const int i){
       auto window = Kokkos::subview(Q_, Kokkos::ALL(), i); 
-      if(extremum_preserving)
-      {
-        
+      if(extremum_preserving)      {
         PPMX_subView_fast(window, ql_jp1(n,i), qr_j(n,i));
-        if(apply_floors){
-          if(n==IDN){
+        if(do_rho_floor){
             ql_jp1(IDN,i) = fmax(ql_jp1(IDN,i), dfloor_);
             qr_j  (IDN,i) = fmax(qr_j  (IDN,i), dfloor_);
-          }
-          if(n==IEN){
+        }
+        if(do_nrg_floor){
             ql_jp1(IEN,i) = fmax(ql_jp1(IEN,i), efloor_);
             qr_j  (IEN,i) = fmax(qr_j  (IEN,i), efloor_);
-          }
         }
       }
       else{
-        //
         PPM4_subView(window,ql_jp1(n,i), qr_j(n,i));
       }
     });
